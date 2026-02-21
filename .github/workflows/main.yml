@@ -43,15 +43,31 @@ jobs:
           $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
-          # Enable Administrator account and set password
-          Enable-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-          Set-LocalUser -Name "Administrator" -Password $securePass
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Administrator" -ErrorAction SilentlyContinue
+          # Find built-in Administrator by SID (ends with -500); if missing, create admin user
+          $admin = Get-LocalUser | Where-Object { $_.SID.Value.EndsWith('-500') }
+          if ($admin) {
+              Enable-LocalUser -SID $admin.SID -ErrorAction SilentlyContinue
+              Set-LocalUser -SID $admin.SID -Password $securePass
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member $admin.SID -ErrorAction SilentlyContinue
+              $adminName = $admin.Name
+          } else {
+              New-LocalUser -Name "Administrator" -Password $securePass -AccountNeverExpires -ErrorAction SilentlyContinue
+              if (-not (Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue)) {
+                  New-LocalUser -Name "VPSAdmin" -Password $securePass -AccountNeverExpires
+                  Add-LocalGroupMember -Group "Administrators" -Member "VPSAdmin"
+                  Add-LocalGroupMember -Group "Remote Desktop Users" -Member "VPSAdmin"
+                  $adminName = "VPSAdmin"
+              } else {
+                  Add-LocalGroupMember -Group "Administrators" -Member "Administrator" -ErrorAction SilentlyContinue
+                  Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Administrator"
+                  $adminName = "Administrator"
+              }
+          }
 
-          echo "VPS_CREDS=User: Administrator | Password: $password" >> $env:GITHUB_ENV
+          echo "VPS_USER=$adminName" >> $env:GITHUB_ENV
+          echo "VPS_CREDS=User: $adminName | Password: $password" >> $env:GITHUB_ENV
 
-          $admin = Get-LocalUser -Name "Administrator" -ErrorAction SilentlyContinue
-          if (-not $admin) {
+          if (-not $adminName) {
               Write-Error "Administrator account configuration failed"
               exit 1
           }
@@ -96,9 +112,9 @@ jobs:
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== VPS ACCESS (Administrator) ==="
+          Write-Host "`n=== VPS ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: Administrator"
+          Write-Host "Username: $env:VPS_USER"
           Write-Host "Password: $(echo $env:VPS_CREDS)"
           Write-Host "===============================`n"
 
